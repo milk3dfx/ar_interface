@@ -1,14 +1,19 @@
 #include "ros/ros.h"
 #include "std_msgs/String.h"
 #include "sensor_msgs/Image.h"
+#include "ar_interface/mouse.h"
 
-/**
- * This tutorial demonstrates simple receipt of messages over the ROS system.
- */
-void chatterCallback(const sensor_msgs::Image& msg)
+
+void mjpegCallback(const sensor_msgs::Image& msg)
 {
 	//ROS_INFO("I heard: [%s]", msg->data.c_str());
 	ROS_INFO("I heard: %d, %d", msg.width, msg.height);
+}
+
+void web_mouseCallback(const ar_interface::mouse& msg)
+{
+	//ROS_INFO("I heard: [%s]", msg->data.c_str());
+	ROS_INFO("On click: %d, %d", msg.x, msg.y);
 }
 
 int main(int argc, char **argv)
@@ -47,14 +52,9 @@ int main(int argc, char **argv)
    * is the number of messages that will be buffered up before beginning to throw
    * away the oldest ones.
    */
-  ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 10, chatterCallback);
+	ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 10, mjpegCallback);
+	ros::Subscriber subWebMouse = n.subscribe("/web_mouse", 100, web_mouseCallback);
 
-  /**
-   * ros::spin() will enter a loop, pumping callbacks.  With this version, all
-   * callbacks will be called from within this thread (the main one).  ros::spin()
-   * will exit when Ctrl-C is pressed, or the node is shutdown by the master.
-   */
-  ros::spin();
-
-  return 0;
+	ros::spin();
+	return 0;
 }
