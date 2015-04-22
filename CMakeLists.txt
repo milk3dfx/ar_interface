@@ -11,9 +11,68 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
 )
 
+INCLUDE(FindPkgConfig)
+
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
+# pkg_check_modules(OGRE_OV OGRE OGRE-Overlay)
 
+# Old versions of OGRE (pre 1.9) included OGRE-Overlay in the main package
+# (i.e. there was no OGRE-Overlay component).  So if the above
+# pkg_check_modules() failed, try looking for just OGRE.
+message( STATUS "Msg" )
+message( STATUS OGRE-Overlay=$ENV{OGRE-Overlay} )
+message( STATUS OGRE_OV=$ENV{OGRE_OV} )
+message( STATUS OGRE=$ENV{OGRE} )
+
+message( STATUS OGRE_OV_FOUND=$ENV{OGRE_OV_FOUND} )
+
+if(NOT OGRE_OV_FOUND)
+  pkg_check_modules(OGRE_OV REQUIRED OGRE)
+endif(NOT OGRE_OV_FOUND)
+
+## Find OGRE Plugin path (not necessarily platform-independent, I guess)
+execute_process(COMMAND
+  pkg-config --variable=plugindir OGRE
+  OUTPUT_VARIABLE OGRE_PLUGIN_PATH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+message(STATUS OGRE_PLUGIN_PATH=${OGRE_PLUGIN_PATH})
+
+# find absolute path of ogre libraries.
+# This is stored in the cache to save time on cmake re-run.
+# Using absolute paths is necessary if pkg-config finds Ogre in a different
+# location than the default.  This can happen when Ogre is built from source,
+# or when 2 versions of Ogre are installed.  Using absolute paths ensures that
+# components that link against Ogre (rviz and any packages depending on rviz)
+# all find the same Ogre shared library.
+if(NOT DEFINED OGRE_OV_LIBRARIES_ABS)
+  unset(OGRE_OV_LIBRARIES_ABS_TMP)
+  foreach(_lib ${OGRE_OV_LIBRARIES})
+    set(OGRE_OV_LIB_TAG "OGRE_OV_RVIZ_LIB_${_lib}")
+
+    message( STATUS $ENV{OGRE_OV_LIB_TAG} )
+
+    find_library(${OGRE_OV_LIB_TAG}
+            NAMES ${_lib}
+            HINTS ${OGRE_OV_LIBRARY_DIRS}
+            PATHS ${OGRE_OV_LIBRARY_DIRS}
+    )
+
+    set(OGRE_OV_LIBRARIES_ABS_TMP ${OGRE_OV_LIBRARIES_ABS_TMP} ${${OGRE_OV_LIB_TAG}})
+  endforeach(_lib)
+
+  set(OGRE_OV_LIBRARIES_ABS ${OGRE_OV_LIBRARIES_ABS_TMP}
+        CACHE FILEPATH "Pathname of library ${_lib}")
+endif(NOT DEFINED OGRE_OV_LIBRARIES_ABS)
+
+
+message( STATUS OGRE_OV_LIBRARIES_ABS = $ENV{OGRE_OV_LIBRARIES_ABS} )
+if(NOT OGRE_OV_LIBRARIES_ABS)
+  set(OGRE_OV_LIBRARIES_ABS ${OGRE_OV_LIBRARIES})
+endif()
+
+find_package(OpenGL REQUIRED)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -70,6 +129,9 @@ generate_messages(
    std_msgs
 )
 
+
+message( STATUS OGRE_OV_INCLUDE_DIRS = $ENV{OGRE_OV_INCLUDE_DIRS} )
+
 ###################################
 ## catkin specific configuration ##
 ###################################
@@ -80,9 +142,19 @@ generate_messages(
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES ar_interface
-  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime
+  INCLUDE_DIRS
+    src
+    ${OGRE_OV_INCLUDE_DIRS}
+    ${OPENGL_INCLUDE_DIR}
+  LIBRARIES
+    ar_interface
+    ${OGRE_OV_LIBRARIES_ABS}
+    ${OPENGL_LIBRARIES}
+  CATKIN_DEPENDS
+    roscpp
+    rospy
+    std_msgs
+    message_runtime
 #  DEPENDS system_lib
 )
 
@@ -95,6 +167,8 @@ catkin_package(
 # include_directories(include)
 include_directories(
   ${catkin_INCLUDE_DIRS}
+  ${OGRE_OV_INCLUDE_DIRS}
+  ${OPENGL_INCLUDE_DIR}
 )
 
 ## Declare a cpp library
@@ -148,6 +222,9 @@ include_directories(
 #   # myfile2
 #   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 # )
+install(DIRECTORY ogre_media
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
 
 #############
 ## Testing ##
@@ -162,8 +239,15 @@ include_directories(
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
 
+link_directories(/usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu/OGRE-1.8.0)
+# target_link_libraries(ar_interface libOgreMain.so)
 
 
 add_executable(ar_interface src/ar_interface.cpp)
-target_link_libraries(ar_interface ${catkin_LIBRARIES})
+# add_library(ar_interface /usr/lib/x86_64-linux-gnu/libOgreMain.so)
+target_link_libraries(ar_interface ${catkin_LIBRARIES} libOgreMain.so)
+
 # add_dependencies(talker beginner_tutorials_generate_messages_cpp)
+
+
+
