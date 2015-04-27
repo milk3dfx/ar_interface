@@ -1,5 +1,10 @@
+#include <stdio.h>
+#include <string.h>
+#include <sstream>
+
 #include "ros/ros.h"
 #include "std_msgs/String.h"
+#include "std_msgs/UInt8.h"
 #include "sensor_msgs/Image.h"
 #include "ar_interface/mouse.h"
 
@@ -25,10 +30,26 @@
 #include <OgreTexture.h>
 #include <OgreHardwarePixelBuffer.h>
 
+#define DEBUG_MSGS
+
+Ogre::Root* lRoot;
+sensor_msgs::Image ar_image_msg;
+sensor_msgs::Image image_msg;
+
+using namespace std;
+
+// Callback functions
 void mjpegCallback(const sensor_msgs::Image& msg)
 {
-	//ROS_INFO("I heard: [%s]", msg->data.c_str());
-	ROS_INFO("I heard: %d, %d", msg.width, msg.height);
+	cout << ">> IMAGE MSG" << endl
+		 << "Width: " << msg.width << endl
+		 << "Height: " << msg.height << endl
+		 << "Encoding: " << msg.encoding << endl
+		 << "is_bigendian: " << msg.is_bigendian << endl
+		 << "Step: " << msg.step << endl
+		 << "=================================" << endl;
+
+		image_msg = msg;
 }
 
 void web_mouseCallback(const ar_interface::mouse& msg)
@@ -45,20 +66,22 @@ bool Ogre::Root::renderOneFrame(void){
 	return _fireFrameEnded();
 }
 
+// Main function
 int main(int argc, char **argv)
 {
 	std::cout<<"AR Interface node"<<std::endl;
 
 	ros::init(argc, argv, "ar_interface");
+
 	ros::NodeHandle n;
 
 	ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 10, mjpegCallback);
 	ros::Subscriber subWebMouse = n.subscribe("/web_mouse", 100, web_mouseCallback);
-	ros::Publisher augmented_pub = n.advertise<sensor_msgs::Image>("augmented_image_raw", 1000);
+	ros::Publisher pubAugmentedImage = n.advertise<sensor_msgs::Image>("augmented_image_raw", 100);
 
-	Ogre::Root* lRoot;
+	ros::Publisher chatter_pub = n.advertise<std_msgs::String>("chatter", 1000);
+	ros::Rate loop_rate(10);
 
-	std::cout<<" === AR interface ==="<<std::endl;
 	try{
 		Ogre::String lConfigFileName = "";
 		Ogre::String lPluginsFileName = "";
@@ -81,20 +104,15 @@ int main(int argc, char **argv)
  
 		Ogre::RenderSystem *lRenderSystem = lRenderSystemList[0];
 		lRoot->setRenderSystem(lRenderSystem);
-/*
-			lPluginNames.push_back("RenderSystem_GL");
-			lPluginNames.push_back("Plugin_ParticleFX");
-			//lPluginNames.push_back("Plugin_CgProgramManager");
-			//lPluginNames.push_back("Plugin_BSPSceneManager");
-			lPluginNames.push_back("Plugin_OctreeSceneManager");
-*/
+
 		Ogre::RenderWindow* m_pRenderWnd = lRoot->initialise(false);
 		Ogre::RenderWindow *window = lRoot->createRenderWindow(
 			"AR Interface Test",  // window name
-			800,                   // window width, in pixels
-			600,                   // window height, in pixels
+			640,                   // window width, in pixels
+			480,                   // window height, in pixels
 			false,                 // fullscreen or not
-			0); 
+			0);
+
 
 		Ogre::SceneManager* Scene = lRoot->createSceneManager(Ogre::ST_GENERIC, "MyFirstSceneManager");
 		Ogre::SceneNode* lRootSceneNode = Scene->getRootSceneNode();
@@ -115,19 +133,18 @@ int main(int argc, char **argv)
 
 		Ogre::SceneNode* mNode = lRootSceneNode->createChildSceneNode();
 		mNode->setPosition(0,0,0);
-		mNode->setScale(1, 1, 1);
+		mNode->setScale(0.1, 0.1, 0.1);
 		//Ogre::Entity* planeEnt = Scene->createEntity( "Cube", Ogre::SceneManager::PT_CUBE );
-		Ogre::Entity* planeEnt = Scene->createEntity("mySphere", Ogre::SceneManager::PT_SPHERE);
+		Ogre::Entity* planeEnt = Scene->createEntity("mySphere", Ogre::SceneManager::PT_PLANE);
 		///planeEnt->setMaterialName("Examples/BumpyMetal");
 		mNode->attachObject(planeEnt);
 
-		//Ogre::Entity* ogreEntity = Scene->createEntity("ogrehead.mesh");
 
 		Ogre::Light* light = Scene->createLight("MainLight");
 		light->setPosition(10, 40, 20);
 
 		Ogre::Viewport* vp = window->addViewport(Camera);
-		vp->setBackgroundColour(Ogre::ColourValue(0,0,0));
+		vp->setBackgroundColour(Ogre::ColourValue(0,0,0,0));
 		Camera->setAspectRatio( Ogre::Real(vp->getActualWidth()) / Ogre::Real(vp->getActualHeight()));
 
 		Ogre::TexturePtr rttTexture = Ogre::TextureManager::getSingleton().createManual(
@@ -136,32 +153,75 @@ int main(int argc, char **argv)
 			Ogre::TEX_TYPE_2D, 
 			window->getWidth(), window->getHeight(), 
 			0, 
-			Ogre::PF_R8G8B8, 
+			Ogre::PF_R8G8B8A8, 
 			Ogre::TU_RENDERTARGET);
 		Ogre::RenderTexture* mRT = rttTexture->getBuffer()->getRenderTarget();
 		//           HardwarePixelBufferSharedPtr---^
 		mRT->removeAllViewports();
-    		mRT->addViewport(Camera);
+    	mRT->addViewport(Camera);
  
-    		//set the viewport settings
-    		Ogre::Viewport *vp_s = mRT->getViewport(0);
-    		vp_s->setClearEveryFrame(true);    
-    		vp_s->setOverlaysEnabled(false);
+    	//set the viewport settings
+    	Ogre::Viewport *vp_s = mRT->getViewport(0);
+    	vp_s->setClearEveryFrame(true);    
+    	vp_s->setOverlaysEnabled(false);
+    	vp_s->setBackgroundColour(Ogre::ColourValue(0,0,0,0));
+        mRT->update();        //render
+
+        // Write image to file
+        // mRT->writeContentsToFile("image1.jpg");
+
+
+        Ogre::HardwarePixelBufferSharedPtr pixelBuffer = rttTexture->getBuffer();
+        pixelBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL); // for best performance use HBL_DISCARD!
+		const Ogre::PixelBox& pixelBox = pixelBuffer->getCurrentLock();
  
-    		// remind current overlay flag
-    		//bool enableOverlayFlag = Ogre::Root::getSingletonPtr()->getDefaultViewport()->getOverlaysEnabled();
- 
-    		// we disable overlay rendering if it is set in config file and the viewport setting is enabled
-    		//if(mDisableOverlays && enableOverlayFlag)
-        	//	Ogre::Root::getSingletonPtr()->getDefaultViewport()->setOverlaysEnabled(false);
- 
-   
-        	// Simple case where the contents of the screen are taken directly
-        	// Also used when an invalid value is passed within gridSize (zero or negative grid size)
-        	mRT->update();        //render
- 
-        	//write the file on the Harddisk
-        	mRT->writeContentsToFile("image1.jpg");
+		Ogre::uint8* pDest = static_cast< Ogre::uint8* >(pixelBox.data);
+
+
+
+			std::cout<<"CREATING MSG"<<std::endl;
+			ar_image_msg.width = window->getWidth();
+			ar_image_msg.height = window->getHeight();
+			ar_image_msg.encoding = "rgba8";
+			ar_image_msg.step = 4*window->getWidth();
+
+			ar_image_msg.data.clear();
+			for (size_t j = 0; j < window->getWidth(); j++)
+			{
+			    for(size_t i = 0; i < window->getHeight(); i++)
+			    {
+			    	ar_image_msg.data.push_back(*pDest++);
+			    	ar_image_msg.data.push_back(*pDest++);
+			    	ar_image_msg.data.push_back(*pDest++);
+			    	//ar_image_msg.data.push_back(*pDest++);
+			    	cout << (int)*pDest++ << " ";
+			    }
+			    pDest += pixelBox.getRowSkip() * Ogre::PixelUtil::getNumElemBytes(pixelBox.format);
+			}
+
+			// Unlock the pixel buffer
+			pixelBuffer->unlock();
+			std::cout<<"TOPIC"<<std::endl;
+
+			int count = 0;
+			while (ros::ok()){
+
+				for(int i=0; i < image_msg.data.size()/3; i++){
+					if(ar_image_msg.data.at(4*i + 3) != 0 ){
+						image_msg.data.at(3*i) = ar_image_msg.data.at(4*i);
+						image_msg.data.at(3*i + 1) = ar_image_msg.data.at(4*i+1);
+						image_msg.data.at(3*i + 2) = ar_image_msg.data.at(4*i+2);
+					}
+				}
+
+				pubAugmentedImage.publish(image_msg);
+				cout<< ">> ar_image_msg published" << count <<std::endl;
+
+
+				ros::spinOnce();
+				loop_rate.sleep();
+				++count;
+		   	}
 
 
  
@@ -174,6 +234,8 @@ int main(int argc, char **argv)
 		//renderTexture->writeContentsToFile("start.png");
 
 		//Ogre::Image finalImage;
+
+
 
 		while(true){
 			Ogre::WindowEventUtilities::messagePump();
