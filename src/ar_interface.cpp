@@ -29,6 +29,13 @@
 #include <OgreWindowEventUtilities.h>
 #include <OgreTexture.h>
 #include <OgreHardwarePixelBuffer.h>
+#include <OgreMeshManager.h>
+#include <OgreMatrix4.h>
+#include <OgreVector3.h>
+#include <OgreMatrix3.h>
+#include <OgreMath.h>
+#include <OgreQuaternion.h>
+
 
 #define DEBUG_MSGS
 
@@ -80,7 +87,7 @@ int main(int argc, char **argv)
 	ros::Publisher pubAugmentedImage = n.advertise<sensor_msgs::Image>("augmented_image_raw", 100);
 
 	ros::Publisher chatter_pub = n.advertise<std_msgs::String>("chatter", 1000);
-	ros::Rate loop_rate(10);
+	ros::Rate loop_rate(20);
 
 	try{
 		Ogre::String lConfigFileName = "";
@@ -122,7 +129,7 @@ int main(int argc, char **argv)
 		Camera->setNearClipDistance(1.0f);
 		Camera->setFarClipDistance(1000.0f);
 		//Camera->setFOVy(45.0f);
-		Camera->setPosition(0,0,120);
+		Camera->setPosition(0,0,10);
 		//Camera->lookAt(Ogre::Vector3(0, 0, 0));
 		
 
@@ -133,11 +140,31 @@ int main(int argc, char **argv)
 
 		Ogre::SceneNode* mNode = lRootSceneNode->createChildSceneNode();
 		mNode->setPosition(0,0,0);
-		mNode->setScale(0.1, 0.1, 0.1);
+		mNode->setScale(1, 1, 1);
+		// mNode->setOrientation();
+		Ogre::Matrix3 rMx;
+		rMx.FromAngleAxis(Ogre::Vector3(1, 0, 0), Ogre::Radian(Ogre::Degree(90)));
+		Ogre::Quaternion rQx(rMx);
+		mNode->rotate(rMx);
+
+		Ogre::Plane plane(Ogre::Vector3::UNIT_Y, 0);
+		Ogre::MeshManager::getSingleton().createPlane(
+			"label",
+		 	Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+			plane, 
+			1, 1, // Size
+			1, 1, // Segments
+			true, 
+			1, 5, 5, 
+			Ogre::Vector3::UNIT_Z
+		);
+
+		Ogre::Entity* labelEntity = Scene->createEntity("label");
+
 		//Ogre::Entity* planeEnt = Scene->createEntity( "Cube", Ogre::SceneManager::PT_CUBE );
-		Ogre::Entity* planeEnt = Scene->createEntity("mySphere", Ogre::SceneManager::PT_PLANE);
+		//Ogre::Entity* planeEnt = Scene->createEntity("mySphere", Ogre::SceneManager::PT_PLANE);
 		///planeEnt->setMaterialName("Examples/BumpyMetal");
-		mNode->attachObject(planeEnt);
+		mNode->attachObject(labelEntity);
 
 
 		Ogre::Light* light = Scene->createLight("MainLight");
@@ -171,13 +198,18 @@ int main(int argc, char **argv)
         // mRT->writeContentsToFile("image1.jpg");
 
 
-        Ogre::HardwarePixelBufferSharedPtr pixelBuffer = rttTexture->getBuffer();
-        pixelBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL); // for best performance use HBL_DISCARD!
-		const Ogre::PixelBox& pixelBox = pixelBuffer->getCurrentLock();
- 
-		Ogre::uint8* pDest = static_cast< Ogre::uint8* >(pixelBox.data);
 
+		std::cout<<"TOPIC"<<std::endl;
+		int count = 0;
+		while (ros::ok()){
 
+			float scale = 1 + 0.005*(float)(count%100);
+			mNode->setScale(scale , scale, scale);
+
+	        Ogre::HardwarePixelBufferSharedPtr pixelBuffer = rttTexture->getBuffer();
+	        pixelBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL); // for best performance use HBL_DISCARD!
+			const Ogre::PixelBox& pixelBox = pixelBuffer->getCurrentLock();
+			Ogre::uint8* pDest = static_cast< Ogre::uint8* >(pixelBox.data);
 
 			std::cout<<"CREATING MSG"<<std::endl;
 			ar_image_msg.width = window->getWidth();
@@ -193,35 +225,35 @@ int main(int argc, char **argv)
 			    	ar_image_msg.data.push_back(*pDest++);
 			    	ar_image_msg.data.push_back(*pDest++);
 			    	ar_image_msg.data.push_back(*pDest++);
-			    	//ar_image_msg.data.push_back(*pDest++);
-			    	cout << (int)*pDest++ << " ";
+			    	ar_image_msg.data.push_back(*pDest++);
 			    }
 			    pDest += pixelBox.getRowSkip() * Ogre::PixelUtil::getNumElemBytes(pixelBox.format);
 			}
 
 			// Unlock the pixel buffer
 			pixelBuffer->unlock();
-			std::cout<<"TOPIC"<<std::endl;
 
-			int count = 0;
-			while (ros::ok()){
-
-				for(int i=0; i < image_msg.data.size()/3; i++){
-					if(ar_image_msg.data.at(4*i + 3) != 0 ){
-						image_msg.data.at(3*i) = ar_image_msg.data.at(4*i);
-						image_msg.data.at(3*i + 1) = ar_image_msg.data.at(4*i+1);
-						image_msg.data.at(3*i + 2) = ar_image_msg.data.at(4*i+2);
-					}
+			for(int i=0; i < image_msg.data.size()/3; i++){
+				if(ar_image_msg.data.at(4*i + 3) != 0 ){
+					image_msg.data.at(3*i) = ar_image_msg.data.at(4*i);
+					image_msg.data.at(3*i + 1) = ar_image_msg.data.at(4*i+1);
+					image_msg.data.at(3*i + 2) = ar_image_msg.data.at(4*i+2);
 				}
+			}
 
-				pubAugmentedImage.publish(image_msg);
-				cout<< ">> ar_image_msg published" << count <<std::endl;
+			pubAugmentedImage.publish(image_msg);
+			cout<< ">> ar_image_msg published" << count <<std::endl;
 
 
-				ros::spinOnce();
-				loop_rate.sleep();
-				++count;
-		   	}
+			ros::spinOnce();
+			loop_rate.sleep();
+			++count;
+
+			Ogre::WindowEventUtilities::messagePump();
+			if(window->isClosed()) return false;
+			if(!lRoot->renderOneFrame()) return false;
+
+		}
 
 
  
@@ -236,7 +268,7 @@ int main(int argc, char **argv)
 		//Ogre::Image finalImage;
 
 
-
+/*
 		while(true){
 			Ogre::WindowEventUtilities::messagePump();
  
@@ -244,7 +276,7 @@ int main(int argc, char **argv)
  
 			if(!lRoot->renderOneFrame()) return false;
 		}
-
+*/
 
 	}
 	catch(Ogre::Exception &e){
