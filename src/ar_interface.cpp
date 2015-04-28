@@ -7,15 +7,13 @@
 #include "std_msgs/UInt8.h"
 #include "sensor_msgs/Image.h"
 #include "ar_interface/mouse.h"
+#include "rail_manipulation_msgs/SegmentedObjectList.h"
 
-/*
-#include "OGRE/OgreRoot.h"
-#include "OGRE/OgreRenderSystem.h"
-#include "OGRE/OgreRenderWindow.h"
-#include "OGRE/OgreWindowEventUtilities.h"
-#include "OGRE/OgreEntity.h"
-#include "OGRE/OgreViewport.h"
-*/
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+
+#include <geometry_msgs/TransformStamped.h>
+#include <geometry_msgs/Twist.h>
 
 #include <OgreRoot.h>
 #include <OgreCamera.h>
@@ -39,23 +37,36 @@
 
 #define DEBUG_MSGS
 
+
+
+
 Ogre::Root* lRoot;
 sensor_msgs::Image ar_image_msg;
 sensor_msgs::Image image_msg;
+ar_interface::mouse mouse_msg;
+rail_manipulation_msgs::SegmentedObjectList recognized_objects;
+
 
 using namespace std;
+
+bool DEBUG = true;
+
+
+// rail_manipulation_msgs/SegmentedObjectList
+// /object_recognition_listener/recognized_objects
 
 // Callback functions
 void mjpegCallback(const sensor_msgs::Image& msg)
 {
-	cout << ">> IMAGE MSG" << endl
+	/*
+	cout << ">> MESSAGE FROM: mjpeg" << endl
 		 << "Width: " << msg.width << endl
 		 << "Height: " << msg.height << endl
 		 << "Encoding: " << msg.encoding << endl
 		 << "is_bigendian: " << msg.is_bigendian << endl
 		 << "Step: " << msg.step << endl
 		 << "=================================" << endl;
-
+	*/
 		image_msg = msg;
 }
 
@@ -63,7 +74,24 @@ void web_mouseCallback(const ar_interface::mouse& msg)
 {
 	//ROS_INFO("I heard: [%s]", msg->data.c_str());
 	ROS_INFO("On click: %d, %d", msg.x, msg.y);
+
+	mouse_msg = msg;
 }
+
+void camera_tfCallback(const ar_interface::mouse& msg)
+{
+	//ROS_INFO("I heard: [%s]", msg->data.c_str());
+	//ROS_INFO("On click: %d, %d", msg.x, msg.y);
+}
+
+void recognized_objectsCallback(const rail_manipulation_msgs::SegmentedObjectList& msg)
+{
+	cout << ">> MESSAGE FROM: recognized objects" << endl
+		 << "Number of objects: " << msg.objects.size() << endl;
+	// msg.objects.at(i).centroid.x (y, z)
+	recognized_objects = msg;
+}
+
 
 bool Ogre::Root::renderOneFrame(void){
 	if(!_fireFrameStarted())
@@ -84,9 +112,15 @@ int main(int argc, char **argv)
 
 	ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 10, mjpegCallback);
 	ros::Subscriber subWebMouse = n.subscribe("/web_mouse", 100, web_mouseCallback);
+	ros::Subscriber subRecognizedObjects = n.subscribe("/object_recognition_listener/recognized_objects",
+														10, recognized_objectsCallback);
+
 	ros::Publisher pubAugmentedImage = n.advertise<sensor_msgs::Image>("augmented_image_raw", 100);
 
-	ros::Publisher chatter_pub = n.advertise<std_msgs::String>("chatter", 1000);
+
+	tf2_ros::Buffer tfBuffer;
+	tf2_ros::TransformListener tfListener(tfBuffer);
+
 	ros::Rate loop_rate(20);
 
 	try{
@@ -130,6 +164,7 @@ int main(int argc, char **argv)
 		Camera->setFarClipDistance(1000.0f);
 		//Camera->setFOVy(45.0f);
 		Camera->setPosition(0,0,10);
+		//Camera->setOrientation(Ogre::Quaternion(-Ogre::Math::PI/18,1,0,0));
 		//Camera->lookAt(Ogre::Vector3(0, 0, 0));
 		
 
@@ -141,18 +176,17 @@ int main(int argc, char **argv)
 		Ogre::SceneNode* mNode = lRootSceneNode->createChildSceneNode();
 		mNode->setPosition(0,0,0);
 		mNode->setScale(1, 1, 1);
-		// mNode->setOrientation();
 		Ogre::Matrix3 rMx;
 		rMx.FromAngleAxis(Ogre::Vector3(1, 0, 0), Ogre::Radian(Ogre::Degree(90)));
 		Ogre::Quaternion rQx(rMx);
-		mNode->rotate(rMx);
+		mNode->setOrientation(rMx);
 
 		Ogre::Plane plane(Ogre::Vector3::UNIT_Y, 0);
 		Ogre::MeshManager::getSingleton().createPlane(
 			"label",
 		 	Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
 			plane, 
-			1, 1, // Size
+			5, 5, // Size
 			1, 1, // Segments
 			true, 
 			1, 5, 5, 
@@ -202,9 +236,48 @@ int main(int argc, char **argv)
 		std::cout<<"TOPIC"<<std::endl;
 		int count = 0;
 		while (ros::ok()){
+			// TF
+			
+			try{
+				geometry_msgs::TransformStamped transformStamped;
+				transformStamped = tfBuffer.lookupTransform("base_footprint", "camera_rgb_frame", ros::Time(0));
 
-			float scale = 1 + 0.005*(float)(count%100);
-			mNode->setScale(scale , scale, scale);
+				geometry_msgs::Vector3 cTranslation = transformStamped.transform.translation;
+				geometry_msgs::Quaternion cRotation = transformStamped.transform.rotation;
+
+				if(DEBUG){
+					cout<< "CAMERA tf " << endl
+						<< "Translation: " << cTranslation.x <<", "
+										   << cTranslation.y <<", "
+										   << cTranslation.z << endl
+						<< "Rotation: " << "x: " << cRotation.x <<", "
+										<< "y: " << cRotation.y <<", "
+										<< "z: " << cRotation.z <<", "
+										<< "w: " << cRotation.w << endl;
+				}
+
+				Ogre::Quaternion cOrientation(cRotation.w, cRotation.x, cRotation.y, cRotation.z);
+
+				cOrientation = 
+					cOrientation
+					*Ogre::Quaternion(0.70710678118,0,-0.70710678118,0)
+					*Ogre::Quaternion(0.70710678118,0,0,-0.70710678118);
+
+				Ogre::Vector3 cPosition(cTranslation.x, cTranslation.y, cTranslation.z);
+				Camera->setOrientation(cOrientation);
+				Camera->setPosition(cPosition);
+			}
+			catch (tf2::TransformException &ex) {
+				ROS_WARN("%s",ex.what());
+				ros::Duration(1.0).sleep();
+				continue;
+			}
+			//Camera->setPosition(Ogre::Vector3(0,0, 1.7));
+			//Camera->setOrientation(Ogre::Quaternion(0.7071,0.7071,0,0));
+
+
+			//float scale = 1 + 0.005*(float)(count%100);
+			//mNode->setScale(scale , scale, scale);
 
 	        Ogre::HardwarePixelBufferSharedPtr pixelBuffer = rttTexture->getBuffer();
 	        pixelBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL); // for best performance use HBL_DISCARD!
@@ -254,29 +327,6 @@ int main(int argc, char **argv)
 			if(!lRoot->renderOneFrame()) return false;
 
 		}
-
-
- 
-		//renderTexture->addViewport(camera);
-		//renderTexture->getViewport(0)->setClearEveryFrame(true);
-		//renderTexture->getViewport(0)->setBackgroundColour(Ogre::ColourValue::Black);
-		//renderTexture->getViewport(0)->setOverlaysEnabled(false);
-		
-		//renderTexture->update();
-		//renderTexture->writeContentsToFile("start.png");
-
-		//Ogre::Image finalImage;
-
-
-/*
-		while(true){
-			Ogre::WindowEventUtilities::messagePump();
- 
-			if(window->isClosed()) return false;
- 
-			if(!lRoot->renderOneFrame()) return false;
-		}
-*/
 
 	}
 	catch(Ogre::Exception &e){
