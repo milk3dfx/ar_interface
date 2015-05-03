@@ -3,6 +3,7 @@
 #include <sstream>
 
 #include "ros/ros.h"
+#include "std_srvs/Empty.h"
 #include "std_msgs/String.h"
 #include "std_msgs/UInt8.h"
 #include "sensor_msgs/Image.h"
@@ -33,6 +34,9 @@
 #include <OgreMatrix3.h>
 #include <OgreMath.h>
 #include <OgreQuaternion.h>
+#include <OgreSceneQuery.h>
+#include <OgreRay.h>
+#include <OgreMovableObject.h>
 
 
 #define DEBUG_MSGS
@@ -49,11 +53,44 @@ rail_manipulation_msgs::SegmentedObjectList recognized_objects;
 
 using namespace std;
 
-bool DEBUG = true;
+bool MOUSE_DEBUG = false;
 
+bool fUpdateObjects = false;
+bool fUpdateMouse = false;
 
+// Recognition
 // rail_manipulation_msgs/SegmentedObjectList
 // /object_recognition_listener/recognized_objects
+
+
+Ogre::MovableObject* getClickedNode(Ogre::SceneManager* ogreSystem , float mouseScreenX, float mouseScreenY){
+	Ogre::Ray mouseRay = ogreSystem->getCamera("ARCamera")->getCameraToViewportRay(mouseScreenX/640, mouseScreenY/480);
+	Ogre::RaySceneQuery *mRaySceneQuery = ogreSystem->createRayQuery(Ogre::Ray(), Ogre::SceneManager::ENTITY_TYPE_MASK);
+	mRaySceneQuery->setRay(mouseRay);
+	mRaySceneQuery->setSortByDistance(true);
+	Ogre::RaySceneQueryResult &result = mRaySceneQuery->execute(); // result is vector
+	Ogre::MovableObject *closestObject = NULL;
+	Ogre::Real closestDistance = 100000;
+
+	Ogre::RaySceneQueryResult::iterator rayIterator;
+
+	for(rayIterator = result.begin(); rayIterator != result.end(); rayIterator++ ){
+		if ((*rayIterator).movable !=NULL &&
+			closestDistance>(*rayIterator).distance &&
+			(*rayIterator).movable->getMovableType() != "TerrainMipMap"){
+
+			closestObject = ( *rayIterator ).movable;
+			closestDistance = ( *rayIterator ).distance;
+			Ogre::Vector3 oldpos = mouseRay.getPoint((*rayIterator).distance);
+			Ogre::Vector3 originalPos = oldpos;
+
+		}
+	}
+	mRaySceneQuery->clearResults();
+	return closestObject;
+}
+
+
 
 // Callback functions
 void mjpegCallback(const sensor_msgs::Image& msg)
@@ -72,24 +109,32 @@ void mjpegCallback(const sensor_msgs::Image& msg)
 
 void web_mouseCallback(const ar_interface::mouse& msg)
 {
-	//ROS_INFO("I heard: [%s]", msg->data.c_str());
-	ROS_INFO("On click: %d, %d", msg.x, msg.y);
 
+	if(MOUSE_DEBUG){
+		ROS_INFO("On click: %d, %d", msg.x, msg.y);
+	}
 	mouse_msg = msg;
-}
-
-void camera_tfCallback(const ar_interface::mouse& msg)
-{
-	//ROS_INFO("I heard: [%s]", msg->data.c_str());
-	//ROS_INFO("On click: %d, %d", msg.x, msg.y);
+	fUpdateMouse = true;
 }
 
 void recognized_objectsCallback(const rail_manipulation_msgs::SegmentedObjectList& msg)
 {
+
 	cout << ">> MESSAGE FROM: recognized objects" << endl
 		 << "Number of objects: " << msg.objects.size() << endl;
+
+	for(int i = 0; i < msg.objects.size(); i++){
+		geometry_msgs::Point centroid =  msg.objects.at(i).centroid;
+		cout << "----------------------------------------" << endl
+			 << "Name: " << msg.objects.at(i).name << endl
+			 << "Confidence: " << msg.objects.at(i).confidence << endl
+			 << "Centroid: " << centroid.x << ", " << centroid.y << ", " << centroid.z << endl;
+	}
 	// msg.objects.at(i).centroid.x (y, z)
-	recognized_objects = msg;
+	if(msg.objects.size() != 0){
+		recognized_objects = msg;
+		fUpdateObjects = true;
+	}
 }
 
 
@@ -110,7 +155,7 @@ int main(int argc, char **argv)
 
 	ros::NodeHandle n;
 
-	ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 10, mjpegCallback);
+	ros::Subscriber sub = n.subscribe("/camera/rgb/image_raw", 100, mjpegCallback);
 	ros::Subscriber subWebMouse = n.subscribe("/web_mouse", 100, web_mouseCallback);
 	ros::Subscriber subRecognizedObjects = n.subscribe("/object_recognition_listener/recognized_objects",
 														10, recognized_objectsCallback);
@@ -121,7 +166,12 @@ int main(int argc, char **argv)
 	tf2_ros::Buffer tfBuffer;
 	tf2_ros::TransformListener tfListener(tfBuffer);
 
-	ros::Rate loop_rate(20);
+	ros::ServiceClient clientSegment = n.serviceClient<std_srvs::Empty>("/rail_segmentation/segment");
+	std_srvs::Empty request;
+	clientSegment.call(request);
+
+	ros::Rate loop_rate(30);
+
 
 	try{
 		Ogre::String lConfigFileName = "";
@@ -186,7 +236,7 @@ int main(int argc, char **argv)
 			"label",
 		 	Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
 			plane, 
-			5, 5, // Size
+			1, 1, // Size
 			1, 1, // Segments
 			true, 
 			1, 5, 5, 
@@ -231,8 +281,6 @@ int main(int argc, char **argv)
         // Write image to file
         // mRT->writeContentsToFile("image1.jpg");
 
-
-
 		std::cout<<"TOPIC"<<std::endl;
 		int count = 0;
 		while (ros::ok()){
@@ -240,8 +288,10 @@ int main(int argc, char **argv)
 			
 			try{
 				geometry_msgs::TransformStamped transformStamped;
-				transformStamped = tfBuffer.lookupTransform("base_footprint", "camera_rgb_frame", ros::Time(0));
 
+				transformStamped = tfBuffer.lookupTransform("base_footprint", "camera_rgb_frame", 
+					image_msg.header.stamp);
+				// ros::Time(0);
 				geometry_msgs::Vector3 cTranslation = transformStamped.transform.translation;
 				geometry_msgs::Quaternion cRotation = transformStamped.transform.rotation;
 
@@ -270,8 +320,43 @@ int main(int argc, char **argv)
 			catch (tf2::TransformException &ex) {
 				ROS_WARN("%s",ex.what());
 				ros::Duration(1.0).sleep();
+				ros::spinOnce();
+				loop_rate.sleep();
+			    ++count;
 				continue;
 			}
+
+			// Create Scene
+			if(fUpdateObjects = true){
+				for(int i = 0; i < recognized_objects.objects.size(); i++){
+					geometry_msgs::Point centroid =  recognized_objects.objects.at(i).centroid;
+
+					Ogre::SceneNode* mNode = lRootSceneNode->createChildSceneNode();
+					mNode->setPosition(centroid.x, centroid.y, centroid.z + 0.15);
+					mNode->setScale(0.1, 0.1, 0.1);
+					Ogre::Matrix3 rMx;
+					rMx.FromAngleAxis(Ogre::Vector3(0, 0, 1), Ogre::Radian(Ogre::Degree(90)));
+					Ogre::Quaternion rQx(rMx);
+					mNode->setOrientation(rMx);
+					Ogre::Entity* labelEntity = Scene->createEntity("label");
+					mNode->attachObject(labelEntity);
+				}
+				fUpdateObjects = false;
+			}
+
+			// Mouse event
+			if(fUpdateMouse == true){
+				fUpdateMouse = false;
+				Ogre::MovableObject* clickedObject = getClickedNode(Scene, (float)mouse_msg.x, (float)mouse_msg.y);
+				if(clickedObject != NULL){
+					Ogre::SceneNode *node = clickedObject->getParentSceneNode();
+					node->setScale(2, 2, 2);
+					if(MOUSE_DEBUG){
+						cout << "MOUSE: Node selected" << endl;
+					}
+				}
+			}
+
 			//Camera->setPosition(Ogre::Vector3(0,0, 1.7));
 			//Camera->setOrientation(Ogre::Quaternion(0.7071,0.7071,0,0));
 
@@ -284,7 +369,7 @@ int main(int argc, char **argv)
 			const Ogre::PixelBox& pixelBox = pixelBuffer->getCurrentLock();
 			Ogre::uint8* pDest = static_cast< Ogre::uint8* >(pixelBox.data);
 
-			std::cout<<"CREATING MSG"<<std::endl;
+			// CREATING image message
 			ar_image_msg.width = window->getWidth();
 			ar_image_msg.height = window->getHeight();
 			ar_image_msg.encoding = "rgba8";
@@ -315,8 +400,9 @@ int main(int argc, char **argv)
 			}
 
 			pubAugmentedImage.publish(image_msg);
-			cout<< ">> ar_image_msg published" << count <<std::endl;
-
+			if(DEBUG){
+				cout<< ">> ar_image_msg published" << count <<std::endl;
+			}
 
 			ros::spinOnce();
 			loop_rate.sleep();
