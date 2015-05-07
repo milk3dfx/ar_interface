@@ -38,29 +38,34 @@
 #include <OgreRay.h>
 #include <OgreMovableObject.h>
 
-
-#define DEBUG_MSGS
-
+using namespace std;
 
 
-
+// OGRE Root object
 Ogre::Root* lRoot;
+
+// ROS messages
 sensor_msgs::Image ar_image_msg;
 sensor_msgs::Image image_msg;
 ar_interface::mouse mouse_msg;
 rail_manipulation_msgs::SegmentedObjectList recognized_objects;
 
 
-using namespace std;
 
+
+// Debug varibles
 bool MOUSE_DEBUG = false;
+bool IMAGES_DEBUG = false;
+bool TF_DEBUG = false;
 
+// Segmentation
+// if this flag is true, then node will call segmentation topic
+bool fSegmentation = true;
+
+
+// Flow control varibles
 bool fUpdateObjects = false;
 bool fUpdateMouse = false;
-
-// Recognition
-// rail_manipulation_msgs/SegmentedObjectList
-// /object_recognition_listener/recognized_objects
 
 
 Ogre::MovableObject* getClickedNode(Ogre::SceneManager* ogreSystem , float mouseScreenX, float mouseScreenY){
@@ -92,19 +97,19 @@ Ogre::MovableObject* getClickedNode(Ogre::SceneManager* ogreSystem , float mouse
 
 
 
-// Callback functions
+// ========== Callback functions ==========
 void mjpegCallback(const sensor_msgs::Image& msg)
 {
-	/*
-	cout << ">> MESSAGE FROM: mjpeg" << endl
-		 << "Width: " << msg.width << endl
-		 << "Height: " << msg.height << endl
-		 << "Encoding: " << msg.encoding << endl
-		 << "is_bigendian: " << msg.is_bigendian << endl
-		 << "Step: " << msg.step << endl
-		 << "=================================" << endl;
-	*/
-		image_msg = msg;
+	if(IMAGES_DEBUG){
+		cout << ">> MESSAGE FROM: mjpeg" << endl
+			 << "Width: " << msg.width << endl
+			 << "Height: " << msg.height << endl
+			 << "Encoding: " << msg.encoding << endl
+			 << "is_bigendian: " << msg.is_bigendian << endl
+			 << "Step: " << msg.step << endl
+			 << "=================================" << endl;
+	}
+	image_msg = msg;
 }
 
 void web_mouseCallback(const ar_interface::mouse& msg)
@@ -119,7 +124,6 @@ void web_mouseCallback(const ar_interface::mouse& msg)
 
 void recognized_objectsCallback(const rail_manipulation_msgs::SegmentedObjectList& msg)
 {
-
 	cout << ">> MESSAGE FROM: recognized objects" << endl
 		 << "Number of objects: " << msg.objects.size() << endl;
 
@@ -130,15 +134,15 @@ void recognized_objectsCallback(const rail_manipulation_msgs::SegmentedObjectLis
 			 << "Confidence: " << msg.objects.at(i).confidence << endl
 			 << "Centroid: " << centroid.x << ", " << centroid.y << ", " << centroid.z << endl;
 	}
-	// msg.objects.at(i).centroid.x (y, z)
 	if(msg.objects.size() != 0){
 		recognized_objects = msg;
 		fUpdateObjects = true;
 	}
 }
 
-
-bool Ogre::Root::renderOneFrame(void){
+// OGRE Render one frame function
+bool Ogre::Root::renderOneFrame(void)
+{
 	if(!_fireFrameStarted())
 		return false;
 	if(!_updateAllRenderTargets())
@@ -146,7 +150,7 @@ bool Ogre::Root::renderOneFrame(void){
 	return _fireFrameEnded();
 }
 
-// Main function
+// ========== Main function ==========
 int main(int argc, char **argv)
 {
 	std::cout<<"AR Interface node"<<std::endl;
@@ -166,27 +170,30 @@ int main(int argc, char **argv)
 	tf2_ros::Buffer tfBuffer;
 	tf2_ros::TransformListener tfListener(tfBuffer);
 
+	// Segmentation service
 	ros::ServiceClient clientSegment = n.serviceClient<std_srvs::Empty>("/rail_segmentation/segment");
 	std_srvs::Empty request;
-	clientSegment.call(request);
+	if(fSegmentation){
+		clientSegment.call(request);
+	}
 
 	ros::Rate loop_rate(30);
 
 
 	try{
+		// OGRE root
 		Ogre::String lConfigFileName = "";
 		Ogre::String lPluginsFileName = "";
 		Ogre::String lLogFileName = "ar_interface_ogre.LOG";
 		lRoot = new Ogre::Root(lConfigFileName, lPluginsFileName, lLogFileName);
-		//if(!lRoot->showConfigDialog())
-		//	return false;
 
+		// Load OGRE plagins
 		lRoot->loadPlugin("Plugin_OctreeSceneManager");
 		lRoot->loadPlugin("RenderSystem_GL");
-		//lRoot->loadPlugin("Plugin_BSPSceneManager");        
-    		//
 		lRoot->loadPlugin("Plugin_ParticleFX");
 
+
+		// Create render system and window
 		const Ogre::RenderSystemList& lRenderSystemList = lRoot->getAvailableRenderers();
 		if( lRenderSystemList.size() == 0 ){
 			Ogre::LogManager::getSingleton().logMessage("Sorry, no rendersystem was found.");
@@ -195,7 +202,6 @@ int main(int argc, char **argv)
  
 		Ogre::RenderSystem *lRenderSystem = lRenderSystemList[0];
 		lRoot->setRenderSystem(lRenderSystem);
-
 		Ogre::RenderWindow* m_pRenderWnd = lRoot->initialise(false);
 		Ogre::RenderWindow *window = lRoot->createRenderWindow(
 			"AR Interface Test",  // window name
@@ -204,33 +210,16 @@ int main(int argc, char **argv)
 			false,                 // fullscreen or not
 			0);
 
-
+		// Create scene and roof scene node
 		Ogre::SceneManager* Scene = lRoot->createSceneManager(Ogre::ST_GENERIC, "MyFirstSceneManager");
 		Ogre::SceneNode* lRootSceneNode = Scene->getRootSceneNode();
 		
-		std::cout<<"CAMERA:"<<std::endl;
+		// Create camera
 		Ogre::Camera* Camera = Scene->createCamera("ARCamera");
 		Camera->setNearClipDistance(1.0f);
 		Camera->setFarClipDistance(1000.0f);
-		//Camera->setFOVy(45.0f);
-		Camera->setPosition(0,0,10);
-		//Camera->setOrientation(Ogre::Quaternion(-Ogre::Math::PI/18,1,0,0));
-		//Camera->lookAt(Ogre::Vector3(0, 0, 0));
-		
 
-
-		//Ogre::SceneNode* nCamera = lRootSceneNode->createChildSceneNode();
-		//nCamera->setPosition(0,0,5);
-		//nCamera->attachObject(Camera);
-
-		Ogre::SceneNode* mNode = lRootSceneNode->createChildSceneNode();
-		mNode->setPosition(0,0,0);
-		mNode->setScale(1, 1, 1);
-		Ogre::Matrix3 rMx;
-		rMx.FromAngleAxis(Ogre::Vector3(1, 0, 0), Ogre::Radian(Ogre::Degree(90)));
-		Ogre::Quaternion rQx(rMx);
-		mNode->setOrientation(rMx);
-
+		// Create plane object, which will use like label
 		Ogre::Plane plane(Ogre::Vector3::UNIT_Y, 0);
 		Ogre::MeshManager::getSingleton().createPlane(
 			"label",
@@ -243,21 +232,18 @@ int main(int argc, char **argv)
 			Ogre::Vector3::UNIT_Z
 		);
 
-		Ogre::Entity* labelEntity = Scene->createEntity("label");
-
-		//Ogre::Entity* planeEnt = Scene->createEntity( "Cube", Ogre::SceneManager::PT_CUBE );
-		//Ogre::Entity* planeEnt = Scene->createEntity("mySphere", Ogre::SceneManager::PT_PLANE);
-		///planeEnt->setMaterialName("Examples/BumpyMetal");
-		mNode->attachObject(labelEntity);
 
 
+		// Light
 		Ogre::Light* light = Scene->createLight("MainLight");
 		light->setPosition(10, 40, 20);
 
+		// View point for window
 		Ogre::Viewport* vp = window->addViewport(Camera);
 		vp->setBackgroundColour(Ogre::ColourValue(0,0,0,0));
 		Camera->setAspectRatio( Ogre::Real(vp->getActualWidth()) / Ogre::Real(vp->getActualHeight()));
 
+		// Create texture for randering
 		Ogre::TexturePtr rttTexture = Ogre::TextureManager::getSingleton().createManual(
 			"RttTex", 
 			Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, 
@@ -267,35 +253,29 @@ int main(int argc, char **argv)
 			Ogre::PF_R8G8B8A8, 
 			Ogre::TU_RENDERTARGET);
 		Ogre::RenderTexture* mRT = rttTexture->getBuffer()->getRenderTarget();
-		//           HardwarePixelBufferSharedPtr---^
 		mRT->removeAllViewports();
     	mRT->addViewport(Camera);
  
-    	//set the viewport settings
+    	//Wiew point for rander texture
     	Ogre::Viewport *vp_s = mRT->getViewport(0);
     	vp_s->setClearEveryFrame(true);    
     	vp_s->setOverlaysEnabled(false);
     	vp_s->setBackgroundColour(Ogre::ColourValue(0,0,0,0));
-        mRT->update();        //render
+        mRT->update();
 
-        // Write image to file
-        // mRT->writeContentsToFile("image1.jpg");
 
-		std::cout<<"TOPIC"<<std::endl;
 		int count = 0;
 		while (ros::ok()){
-			// TF
-			
 			try{
 				geometry_msgs::TransformStamped transformStamped;
 
 				transformStamped = tfBuffer.lookupTransform("base_footprint", "camera_rgb_frame", 
 					image_msg.header.stamp);
-				// ros::Time(0);
+
 				geometry_msgs::Vector3 cTranslation = transformStamped.transform.translation;
 				geometry_msgs::Quaternion cRotation = transformStamped.transform.rotation;
 
-				if(DEBUG){
+				if(TF_DEBUG){
 					cout<< "CAMERA tf " << endl
 						<< "Translation: " << cTranslation.x <<", "
 										   << cTranslation.y <<", "
@@ -305,7 +285,6 @@ int main(int argc, char **argv)
 										<< "z: " << cRotation.z <<", "
 										<< "w: " << cRotation.w << endl;
 				}
-
 				Ogre::Quaternion cOrientation(cRotation.w, cRotation.x, cRotation.y, cRotation.z);
 
 				cOrientation = 
@@ -350,19 +329,13 @@ int main(int argc, char **argv)
 				Ogre::MovableObject* clickedObject = getClickedNode(Scene, (float)mouse_msg.x, (float)mouse_msg.y);
 				if(clickedObject != NULL){
 					Ogre::SceneNode *node = clickedObject->getParentSceneNode();
-					node->setScale(2, 2, 2);
+					// Set new scale value of clicked objet
+					node->setScale(0.2, 0.2, 0.2);
 					if(MOUSE_DEBUG){
 						cout << "MOUSE: Node selected" << endl;
 					}
 				}
 			}
-
-			//Camera->setPosition(Ogre::Vector3(0,0, 1.7));
-			//Camera->setOrientation(Ogre::Quaternion(0.7071,0.7071,0,0));
-
-
-			//float scale = 1 + 0.005*(float)(count%100);
-			//mNode->setScale(scale , scale, scale);
 
 	        Ogre::HardwarePixelBufferSharedPtr pixelBuffer = rttTexture->getBuffer();
 	        pixelBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL); // for best performance use HBL_DISCARD!
@@ -374,6 +347,7 @@ int main(int argc, char **argv)
 			ar_image_msg.height = window->getHeight();
 			ar_image_msg.encoding = "rgba8";
 			ar_image_msg.step = 4*window->getWidth();
+
 
 			ar_image_msg.data.clear();
 			for (size_t j = 0; j < window->getWidth(); j++)
@@ -391,6 +365,7 @@ int main(int argc, char **argv)
 			// Unlock the pixel buffer
 			pixelBuffer->unlock();
 
+			// Copy AR image over real image
 			for(int i=0; i < image_msg.data.size()/3; i++){
 				if(ar_image_msg.data.at(4*i + 3) != 0 ){
 					image_msg.data.at(3*i) = ar_image_msg.data.at(4*i);
@@ -400,9 +375,6 @@ int main(int argc, char **argv)
 			}
 
 			pubAugmentedImage.publish(image_msg);
-			if(DEBUG){
-				cout<< ">> ar_image_msg published" << count <<std::endl;
-			}
 
 			ros::spinOnce();
 			loop_rate.sleep();
